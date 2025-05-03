@@ -44,8 +44,8 @@ This AI Copilot streamlines that process by enabling:
 
 ### 1. Clone & Install
 ```bash
-git clone <repository-url>
-cd <repository-folder>
+git clone https://github.com/fayezzouari/klara.git
+cd KLARA
 pip install -r requirements.txt
 ```
 
