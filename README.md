@@ -1,3 +1,14 @@
+---
+title: AI Copilot for Renewable Energy Data Rooms
+emoji: ⚡
+colorFrom: green
+colorTo: blue
+sdk: gradio
+sdk_version: "4.16.0"
+app_file: app.py
+pinned: false
+---
+
 # ⚡ AI Copilot for Renewable Energy Data Rooms
 
 This project is a smart assistant designed to automate document analysis in renewable energy data rooms. Developers often face a flood of critical documents — leases, permits, interconnection agreements — stored in PDFs or spreadsheets. Manually parsing and transferring relevant data into checklists or reports is slow, error-prone, and costly.
@@ -15,7 +26,73 @@ This AI Copilot streamlines that process by enabling:
 - **Saves time** by automating tedious document parsing  
 - **Reduces errors** in due diligence workflows  
 - **Boosts trust** with answers linked to exact document locations  
-- **Fits custom workflows** by supporting organization-specific checklists
+- **Fits custom workflows** by supportina# ⚡ AI Copilot for Renewable Energy Data Rooms
+
+> A smart Gradio-powered assistant for analyzing critical documents like leases, permits, and interconnection agreements in renewable energy projects.
+
+![Hugging Face Space](https://img.shields.io/badge/🤖%20AI%20Copilot-Gradio%20App-blue?logo=gradio)
+![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)
+
+---
+
+## 🔎 Overview
+
+This AI Copilot is designed to help developers and analysts working in renewable energy data rooms quickly extract key information from large volumes of PDF and spreadsheet files. It streamlines due diligence by automating:
+
+- 📄 **Bulk PDF upload and parsing**  
+- 💬 **Natural language question answering on document content**  
+- 📌 **Answers with references, page numbers, and source quotes**  
+- ✅ **Auto-filling due diligence checklists (WIP)**
+
+---
+
+## 🚀 Demo
+
+Try it out directly in the [Hugging Face Space](https://huggingface.co/spaces/fayezzouari/klara).
+
+---
+
+## 🌟 Features
+
+- ⏱ **Time-saving** document analysis  
+- 🛡️ **Traceable** answers with inline source citations  
+- 🧠 **LLM-powered** query understanding via LangChain and Groq  
+- 🧩 **Plug-and-play** with your own checklists and workflows  
+
+---
+
+## 🧠 How It Works
+
+1. **PDF Parsing** – Text and metadata extraction  
+2. **Semantic Chunking** – Smart segmentation with `chonkie`  
+3. **Vector Embedding** – Semantic storage via ChromaDB  
+4. **LLM QA** – Natural language answers from Groq's LLMs via LangChain  
+5. **Checklist Automation (WIP)** – Extract and match info to project-specific checklists  
+
+---
+
+## 🛠️ Tech Stack
+
+| Component              | Role                                 |
+|------------------------|--------------------------------------|
+| 🖼️ Gradio              | Web UI for interaction               |
+| 🧱 ChromaDB             | Vector store for fast semantic search |
+| 🧠 LangChain + Groq API | LLM query engine                    |
+| 📄 PyPDF               | PDF extraction                       |
+| 🔍 Sentence Transformers | Embedding generation               |
+| 🧩 Chonkie             | Custom chunking utility              |
+
+---
+
+## ⚙️ Setup & Usage
+
+### 🔧 Installation
+
+```bash
+git clone https://github.com/fayezzouari/klara.git
+cd klara
+pip install -r requirements.txt
+g organization-specific checklists
 
 ---
 
