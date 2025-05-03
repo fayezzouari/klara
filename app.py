@@ -5,126 +5,155 @@ from utils.markdown_formatter import convert_citations_to_markdown
 from utils.url_utils import download_pdf, is_valid_url, is_pdf_url, extract_pdf_links_from_webpage
 from dotenv import load_dotenv
 from PIL import Image
+
 # Initialize the document processor
 processor = DocumentProcessor()
 
-def process_multiple_files(pdf_files, pdf_urls):
-    """Process multiple PDF and image files, as well as URLs."""
-    # cean up temporary files
-    
-
-    if not pdf_files and not (pdf_urls and pdf_urls.strip()):
+def process_multiple_files(files, urls):
+    """Process multiple files and URLs."""
+    if not files and not (urls and urls.strip()):
         return "No files or URLs provided. Please upload files or enter URLs."
     
     results = []
     processed_count = 0
     
-    # Separate PDFs and images
-    pdf_files_list = []
-    image_files_list = []
-    
-    if pdf_files:
-        for file in pdf_files:
-            original_filename = None
-            if isinstance(file, tuple):
-                if len(file) >= 1:
-                    original_filename = os.path.basename(file[0])
-            elif isinstance(file, dict) and 'name' in file:
-                original_filename = file['name']
-            elif hasattr(file, 'name'):
-                original_filename = file.name
-            
-            if original_filename:
-                if original_filename.lower().endswith('.pdf'):
-                    pdf_files_list.append(file)
-                elif original_filename.lower().endswith(('.png', '.jpg', '.jpeg')):
-                    image_files_list.append(file)
-                else:
-                    results.append(f"⚠️ Unsupported file type: '{original_filename}'")
-    
-    # Process PDF files
-    for pdf_file in pdf_files_list:
-        try:
-            original_filename = os.path.basename(pdf_file.name) if hasattr(pdf_file, 'name') else f"uploaded_document_{processed_count}.pdf"
-            pdf_path = processor.save_temp_pdf(pdf_file)
-            if pdf_path:
-                success = processor.process_pdf(pdf_path, original_filename)
+    # Process uploaded files
+    if files:
+        for file in files:
+            try:
+                # Extract original filename
+                original_filename = None
+                if isinstance(file, tuple):
+                    if len(file) >= 1:
+                        original_filename = os.path.basename(file[0])
+                elif isinstance(file, dict) and 'name' in file:
+                    original_filename = file['name']
+                elif hasattr(file, 'name'):
+                    original_filename = file.name
                 
-                # Clean up the temporary file
-                if os.path.exists(pdf_path) and "tmp" in pdf_path:
-                    os.unlink(pdf_path)
-                print(f"PDF path: {pdf_path}")
-
-
-                if success:
-                    results.append(f"✅ PDF '{original_filename}' successfully processed")
-                    processed_count += 1
-                else:
-                    results.append(f"❌ Failed to process '{original_filename}'")
-        except Exception as e:
-            results.append(f"❌ Error processing PDF file: {str(e)}")
+                if not original_filename:
+                    original_filename = f"uploaded_document_{processed_count}.tmp"
+                
+                # Save and process the file
+                file_path, saved_filename = processor.save_temp_file(file)
+                if file_path:
+                    # Determine file type
+                    file_ext = os.path.splitext(saved_filename)[1].lower()
+                    
+                    if file_ext == '.pdf':
+                        success = processor.process_pdf(file_path, original_filename or saved_filename)
+                        file_type = "PDF"
+                    elif file_ext in ['.csv', '.xlsx', '.xls']:
+                        success = processor.process_file(file_path, original_filename or saved_filename)
+                        file_type = "CSV" if file_ext == '.csv' else "Excel"
+                    else:
+                        success = False
+                        file_type = "Unsupported"
+                        results.append(f"❌ Unsupported file type: {file_ext}")
+                        continue
+                    
+                    # Clean up the temporary file
+                    if os.path.exists(file_path) and "tmp" in file_path:
+                        os.unlink(file_path)
+                    
+                    if success:
+                        results.append(f"✅ {file_type} file '{original_filename or saved_filename}' successfully processed")
+                        processed_count += 1
+                    else:
+                        results.append(f"❌ Failed to process '{original_filename or saved_filename}'")
+            except Exception as e:
+                results.append(f"❌ Error processing file: {str(e)}")
     
-
-    # Process image files
-    for image_file in image_files_list:
-        try:
-            original_filename = os.path.basename(image_file.name) if hasattr(image_file, 'name') else f"uploaded_image_{processed_count}.png"
-            image_path = processor.save_temp_img(image_file)
-            if image_path:
-                success = processor.process_img(image_path, original_filename)
-                if success:
-                    results.append(f"✅ Image '{original_filename}' successfully processed")
-                    processed_count += 1
-                else:
-                    results.append(f"❌ Failed to process '{original_filename}'")
-        except Exception as e:
-            results.append(f"❌ Error processing image file: {str(e)}")
-    
-
-    # Process URLs (unchanged)
-    if pdf_urls and pdf_urls.strip():
-        urls = [url.strip() for url in pdf_urls.split('\n') if url.strip()]
+    # Process URLs
+    if urls and urls.strip():
+        url_list = [url.strip() for url in urls.split('\n') if url.strip()]
         
-        # Collect all PDF URLs, including those extracted from web pages
-        all_pdf_urls = []
-        for url in urls:
+        # Collect all URLs, including those for PDFs, CSVs, and Excel files
+        for url in url_list:
             if not is_valid_url(url):
                 results.append(f"❌ Invalid URL: '{url}'")
                 continue
                 
-            # If URL is directly a PDF, add it
-            if is_pdf_url(url):
-                all_pdf_urls.append(url)
+            # Determine file type based on URL
+            file_ext = os.path.splitext(url.split('?')[0].split('#')[0])[1].lower()
+            
+            if file_ext in ['.csv', '.xlsx', '.xls']:
+                # Handle structured data URLs
+                try:
+                    import requests
+                    import tempfile
+                    
+                    response = requests.get(url)
+                    if response.status_code == 200:
+                        # Save to temp file
+                        with tempfile.NamedTemporaryFile(delete=False, suffix=file_ext) as tmp:
+                            tmp.write(response.content)
+                            temp_path = tmp.name
+                        
+                        # Process the file
+                        filename = os.path.basename(url.split('?')[0].split('#')[0])
+                        success = processor.process_file(temp_path, filename)
+                        
+                        # Clean up
+                        if os.path.exists(temp_path):
+                            os.unlink(temp_path)
+                        
+                        if success:
+                            file_type = "CSV" if file_ext == '.csv' else "Excel"
+                            results.append(f"✅ {file_type} from URL '{url}' successfully processed as '{filename}'")
+                            processed_count += 1
+                        else:
+                            results.append(f"❌ Failed to process file from URL '{url}'")
+                    else:
+                        results.append(f"❌ Failed to download file from URL '{url}': HTTP {response.status_code}")
+                except Exception as e:
+                    results.append(f"❌ Error processing URL '{url}': {str(e)}")
+            elif is_pdf_url(url):
+                # Handle PDF URLs (using existing functionality)
+                try:
+                    pdf_path, filename = download_pdf(url)
+                    if pdf_path:
+                        success = processor.process_pdf(pdf_path, filename)
+                        
+                        # Clean up the temporary file
+                        if os.path.exists(pdf_path):
+                            os.unlink(pdf_path)
+                        
+                        if success:
+                            results.append(f"✅ PDF from URL '{url}' successfully processed as '{filename}'")
+                            processed_count += 1
+                        else:
+                            results.append(f"❌ Failed to process PDF from URL '{url}'")
+                    else:
+                        results.append(f"❌ Failed to download PDF from URL '{url}'")
+                except Exception as e:
+                    results.append(f"❌ Error processing URL '{url}': {str(e)}")
             else:
-                # Try to extract PDF links from the webpage
+                # Check if it's a webpage that might contain PDF links
                 extracted_links = extract_pdf_links_from_webpage(url)
                 if extracted_links:
                     results.append(f"ℹ️ Found {len(extracted_links)} PDF links on webpage '{url}'")
-                    all_pdf_urls.extend(extracted_links)
+                    for pdf_url in extracted_links:
+                        try:
+                            pdf_path, filename = download_pdf(pdf_url)
+                            if pdf_path:
+                                success = processor.process_pdf(pdf_path, filename)
+                                
+                                # Clean up the temporary file
+                                if os.path.exists(pdf_path):
+                                    os.unlink(pdf_path)
+                                
+                                if success:
+                                    results.append(f"✅ PDF from URL '{pdf_url}' successfully processed as '{filename}'")
+                                    processed_count += 1
+                                else:
+                                    results.append(f"❌ Failed to process PDF from URL '{pdf_url}'")
+                            else:
+                                results.append(f"❌ Failed to download PDF from URL '{pdf_url}'")
+                        except Exception as e:
+                            results.append(f"❌ Error processing URL '{pdf_url}': {str(e)}")
                 else:
-                    results.append(f"⚠️ No PDF links found on webpage '{url}'")
-        
-        # Process all PDF URLs
-        for url in all_pdf_urls:
-            try:
-                pdf_path, filename = download_pdf(url)
-                if pdf_path:
-                    success = processor.process_pdf(pdf_path, filename)
-                    
-                    # Clean up the temporary file
-                    if os.path.exists(pdf_path):
-                        os.unlink(pdf_path)
-                    print(f"PDF path: {pdf_path}")
-
-                    if success:
-                        results.append(f"✅ PDF from URL '{url}' successfully processed as '{filename}'")
-                        processed_count += 1
-                    else:
-                        results.append(f"❌ Failed to process PDF from URL '{url}'")
-                else:
-                    results.append(f"❌ Failed to download PDF from URL '{url}'")
-            except Exception as e:
-                results.append(f"❌ Error processing URL '{url}': {str(e)}")
+                    results.append(f"⚠️ No processable file links found on webpage '{url}'")
     
     # Format the results
     result_text = "\n".join(results)
@@ -146,40 +175,42 @@ def query_documents(query_text):
     # Convert the response to HTML with clickable links
     html_response = convert_citations_to_markdown(text_response, sources_info)
     
+
+    
     return html_response
 
 # Create the Gradio interface
-with gr.Blocks(title="PDF Document QA System") as demo:
-    gr.Markdown("# PDF Document QA System")
+with gr.Blocks(title="Document QA System") as demo:
+    gr.Markdown("# Document QA System")
     gr.Markdown("""
     This application allows you to:
-    1. Upload multiple PDF documents or provide URLs to PDF files for processing
+    1. Upload multiple documents (PDF, CSV, Excel) or provide URLs to files for processing
     2. Query the documents to get relevant information with clickable source links
     """)
     
     # Document upload and processing section
     with gr.Tab("Upload & Process Documents"):
-        gr.Markdown("## Upload PDF Documents")
+        gr.Markdown("## Upload Documents")
         gr.Markdown("""
         You can:
-        - Upload multiple PDF files at once
-        - Enter URLs directly to PDF files (one per line)
+        - Upload multiple files at once (PDF, CSV, Excel)
+        - Enter URLs directly to files (one per line)
         - Enter URLs to webpages containing PDF links (the system will extract and process them)
         """)
         
         with gr.Row():
             with gr.Column(scale=1):
-                # pdf_files = gr.File(label="Upload PDF Files", file_types=[".pdf"], file_count="multiple")
-                    pdf_files = gr.File(
-                    label="Upload PDF or Image Files", 
-                    file_types=[".pdf", ".png", ".jpg", ".jpeg"], 
+                files = gr.File(
+                    label="Upload Files", 
+                    file_types=[".pdf", ".csv", ".xlsx", ".xls"], 
                     file_count="multiple"
                 )
+            
             with gr.Column(scale=1):
-                pdf_urls = gr.Textbox(
-                    label="PDF URLs or Webpages with PDFs (one per line)", 
+                urls = gr.Textbox(
+                    label="Document URLs or Webpages (one per line)", 
                     lines=5, 
-                    placeholder="https://example.com/document1.pdf\nhttps://example.com/documents-page"
+                    placeholder="https://example.com/document1.pdf\nhttps://example.com/data.csv\nhttps://example.com/documents-page"
                 )
         
         process_button = gr.Button("Process Documents", variant="primary")
@@ -187,7 +218,7 @@ with gr.Blocks(title="PDF Document QA System") as demo:
         
         process_button.click(
             fn=process_multiple_files,
-            inputs=[pdf_files, pdf_urls],
+            inputs=[files, urls],
             outputs=process_output
         )
     
@@ -196,7 +227,7 @@ with gr.Blocks(title="PDF Document QA System") as demo:
         gr.Markdown("## Ask Questions About Your Documents")
         gr.Markdown("""Enter a query to get information from your processed documents.
         
-The citations [p.X] and document names in the Sources section are clickable links to the original PDF.""")
+The citations [N-P] and document names in the Sources section are clickable links to the original documents.""")
         
         query_input = gr.Textbox(label="Your Question", lines=2, placeholder="What does the document say about...?")
         query_button = gr.Button("Ask", variant="primary")
@@ -217,6 +248,14 @@ if __name__ == "__main__":
     if not os.path.exists(".env") or "GROQ_API_KEY" not in open(".env").read():
         print("Warning: .env file missing or GROQ_API_KEY not set.")
         print("Please create a .env file with GROQ_API_KEY=your_api_key")
-
+    
+    # Check for required packages
+    try:
+        import pandas as pd
+        print("Pandas is installed, CSV and Excel processing is enabled.")
+    except ImportError:
+        print("Warning: pandas is not installed. CSV and Excel processing will not work.")
+        print("Install with: pip install pandas")
+    
     # Launch with share=True to make temporary links accessible
     demo.launch()

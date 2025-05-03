@@ -1,6 +1,6 @@
 import os
 import tempfile
-from typing import Dict, List, Any, Optional
+from typing import Dict, List, Any, Optional, Tuple
 from dotenv import load_dotenv
 
 from langchain_community.document_loaders.pdf import PyPDFLoader
@@ -10,7 +10,6 @@ from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.runnables import RunnablePassthrough
 import chromadb
-from langchain.schema import Document
 
 # Import configuration settings
 from config import (
@@ -26,6 +25,9 @@ from config import (
 
 # Import our document splitter
 from splitters.document_splitter import DocumentSplitter
+
+# Import structured data processor
+from utils.structured_data_processor import StructuredDataProcessor
 
 # Load environment variables
 load_dotenv()
@@ -47,6 +49,9 @@ class DocumentProcessor:
             chunk_size=chunk_size,
             min_sentences=min_sentences
         )
+        
+        # Initialize structured data processor
+        self.structured_processor = StructuredDataProcessor(max_rows_per_chunk=50)
         
         # Initialize ChromaDB with embedding function
         self.client = chromadb.Client()
@@ -96,6 +101,7 @@ class DocumentProcessor:
                 doc.metadata["document_name"] = doc_name
                 doc.metadata["document_title"] = doc_title
                 doc.metadata["file_path"] = file_path  # Add file path to metadata
+                doc.metadata["document_type"] = "pdf"  # Mark as PDF
                 
             return documents
             
@@ -103,48 +109,77 @@ class DocumentProcessor:
             print(f"Error parsing PDF: {e}")
             return []
     
-    # applying same logic but for images
-    def parse_img(self, image_path: str, original_filename: str = None) -> List[Dict]:
-        """Parse an image file and return documents with metadata."""
+    def process_structured_file(self, file_path: str, original_filename: str = None) -> List[Dict]:
+        """Process a CSV or Excel file and return structured data chunks."""
         try:
-            #  image processing logic (e.g., OCR)
-            # text = process_image_with_ocr(image_path)  # Placeholder for actual OCR processing
-            text = "iyed has interned at Google and has worked on various projects in the field of AI and machine learning. He is passionate about using technology to solve real-world problems and is always looking for new challenges to tackle."
-            if not text:
-                print("No text found in the image.")
-                return []
+            # Use the structured data processor to handle the file
+            structured_chunks = self.structured_processor.process_file(
+                file_path, 
+                original_filename=original_filename
+            )
             
-            # For now, we will just simulate the output as a list of dictionaries
-            documents = [
-                Document(page_content=text, metadata={
-                    "document_name": original_filename or os.path.basename(image_path),
-                    "document_title": os.path.splitext(original_filename)[0] if original_filename else os.path.splitext(os.path.basename(image_path))[0],
-                    "file_path": os.path.abspath(image_path),  # Add file path to metadata
-                    "page": 0  
-                })
-
-            ]            
+            # Convert to document format compatible with our system
+            documents = []
+            
+            for chunk in structured_chunks:
+                # Get absolute file path
+                abs_file_path = os.path.abspath(file_path)
+                
+                # Add to documents list with proper metadata
+                doc_dict = {
+                    "page_content": chunk["text"],
+                    "metadata": {
+                        "document_name": chunk["metadata"]["document_name"],
+                        "document_title": chunk["metadata"]["document_title"],
+                        "file_path": abs_file_path,
+                        "document_type": "structured_data",  # Mark as structured data
+                        "chunk_type": chunk["metadata"]["chunk_type"],
+                        # Add page as 1 for summary and chunk_idx+1 for data chunks
+                        "page": 1 if chunk["metadata"]["chunk_type"] == "summary" else chunk["metadata"]["chunk_idx"] + 1
+                    }
+                }
+                
+                # Add additional metadata for data chunks
+                if chunk["metadata"]["chunk_type"] == "data_chunk":
+                    doc_dict["metadata"]["row_start"] = chunk["metadata"]["row_start"]
+                    doc_dict["metadata"]["row_end"] = chunk["metadata"]["row_end"]
+                    doc_dict["metadata"]["total_rows"] = chunk["metadata"]["total_rows"]
+                
+                # Create a document object (with dict-like access)
+                class Document:
+                    def __init__(self, data):
+                        self.__dict__.update(data)
+                
+                doc = type('Document', (), doc_dict)
+                documents.append(doc)
+            
             return documents
             
         except Exception as e:
-            print(f"Error parsing image: {e}")
+            print(f"Error processing structured file: {e}")
             return []
-
-
+    
     def chunk_documents(self, documents: List[Dict]) -> List[Dict]:
         """Chunk documents using semantic chunker."""
         chunked_docs = []
         
         for doc in documents:
-            # page_content = doc["page_content"]
             page_content = doc.page_content
-
             metadata = doc.metadata
             
             if not page_content.strip():
                 continue
             
-            # Use our document splitter to chunk the content    
+            # Skip chunking for structured data - already chunked appropriately
+            if metadata.get("document_type") == "structured_data":
+                chunked_docs.append({
+                    "id": f"{metadata['document_name']}_{metadata.get('chunk_type', '')}_{metadata['page']}",
+                    "text": page_content,
+                    "metadata": metadata
+                })
+                continue
+                
+            # Use our document splitter to chunk the content for PDFs    
             chunks = self.splitter.split_text(page_content)
             
             for chunk in chunks:
@@ -157,7 +192,8 @@ class DocumentProcessor:
                         "page_number": metadata["page"] + 1,  # Make page numbers 1-indexed
                         "chunk_id": chunk["chunk_id"],
                         "token_count": chunk["token_count"],
-                        "file_path": metadata.get("file_path", "")  # Include file path in chunk metadata
+                        "file_path": metadata.get("file_path", ""),  # Include file path in chunk metadata
+                        "document_type": metadata.get("document_type", "pdf")
                     }
                 })
         
@@ -195,21 +231,28 @@ class DocumentProcessor:
             return False
             
         return self.store_chunks(chunked_docs)
-    # process images with same logic but ocr
-    def process_img(self, image_path: str, original_filename: str = None) -> bool:
-        """Complete process to parse, chunk, and store image."""
-        documents = self.parse_img(image_path, original_filename)
-        if not documents:
-            return False
-            
-        chunked_docs = self.chunk_documents(documents)
-        if not chunked_docs:
-            return False
-            
-        return self.store_chunks(chunked_docs)
     
+    def process_file(self, file_path: str, original_filename: str = None) -> bool:
+        """Process any supported file (PDF, CSV, Excel) and store in vector DB."""
+        file_ext = os.path.splitext(file_path)[1].lower()
+        
+        if file_ext == '.pdf':
+            return self.process_pdf(file_path, original_filename)
+        elif file_ext in ['.csv', '.xlsx', '.xls']:
+            documents = self.process_structured_file(file_path, original_filename)
+            if not documents:
+                return False
+                
+            chunked_docs = self.chunk_documents(documents)
+            if not chunked_docs:
+                return False
+                
+            return self.store_chunks(chunked_docs)
+        else:
+            print(f"Unsupported file format: {file_ext}")
+            return False
+
     def query_documents(self, query: str, n_results: int = DEFAULT_RESULTS_COUNT) -> Dict:
-        """Query the vector database for relevant chunks across all documents."""
         try:
             # Increase the number of results to ensure we get a diverse set of documents
             enhanced_n_results = n_results * 3
@@ -348,7 +391,13 @@ class DocumentProcessor:
             - At the end of your response, include a "Sources:" section that lists all source numbers and their document titles
             - If the one source is sufficient, you can just use that one source, but still include the "Sources:" section
             - If the rest of the sources are not relevant, you can skip them in the answer.
-            
+            - Present a well-structured response with clear headings when appropriate.
+            - For CSV/Excel data, reference specific rows or data points when appropriate.
+            - If the query asks about numerical data, include relevant statistics.
+            - Do not make up or infer information that isn't in the contexts.
+            - if you don't have enough information, avoid mentioning it in the answer and try to improvise.
+            You are an AI assistant tasked with answering questions based on the provided document contexts. 
+            Your goal is to provide accurate, informative, and helpful responses based ONLY on the information in the contexts.
             Context:
             {context}
             
@@ -423,42 +472,6 @@ class DocumentProcessor:
         except Exception as e:
             print(f"Error saving temporary PDF: {e}")
             return None
-    def save_temp_img(self, img_file) -> Optional[str]:
-        """Save an uploaded image to a temporary file."""
-        try:
-            # Handle Gradio file object which returns a tuple of (file_name, file_path)
-            if isinstance(img_file, tuple) and len(img_file) == 2:
-                file_path = img_file[1]
-                # If the file already exists on disk, return its path
-                if os.path.exists(file_path):
-                    return file_path
-            
-            # For handling direct file uploads or file-like objects
-            with tempfile.NamedTemporaryFile(delete=False, suffix='.jpg') as tmp:
-                if hasattr(img_file, 'read'):
-                    # If it's a file-like object with read method
-                    tmp.write(img_file.read())
-                elif isinstance(img_file, bytes):
-                    # If it's raw bytes
-                    tmp.write(img_file)
-                elif isinstance(img_file, str):
-                    # If it's a file path
-                    if os.path.exists(img_file):
-                        with open(img_file, 'rb') as f:
-                            tmp.write(f.read())
-                    else:
-                        # If it's a string content
-                        tmp.write(img_file.encode())
-                else:
-                    # For Gradio newer versions, the file is directly provided as a path
-                    return img_file
-                    
-                return tmp.name
-        except Exception as e:
-            print(f"Error saving temporary image: {e}")
-            return None
-        
-
 
     def format_context_from_results(self, results: Dict) -> str:
         """Format query results into context for the LLM."""
@@ -479,14 +492,73 @@ class DocumentProcessor:
         # Format context with source numbers
         for i, (doc, metadata) in enumerate(zip(results['documents'][0], results['metadatas'][0])):
             doc_title = metadata['document_title']
-            page_num = metadata['page_number']
-            source_num = source_map[doc_title]
-            
-            context += f"Source: {source_num} ({doc_title})\n"
-            context += f"Page: {page_num}\n"
-            context += f"Content: {doc}\n\n"
+            # Handle different document types
+            if metadata.get('document_type') == 'structured_data':
+                page_num = metadata.get('page', 1)
+                chunk_type = metadata.get('chunk_type', 'data')
+                
+                if chunk_type == 'summary':
+                    context += f"Source: {source_map[doc_title]} ({doc_title} - Summary)\n"
+                else:
+                    context += f"Source: {source_map[doc_title]} ({doc_title} - Data Section {page_num})\n"
+                    
+                if 'row_start' in metadata and 'row_end' in metadata:
+                    context += f"Rows: {metadata['row_start']}-{metadata['row_end']}\n"
+                
+                context += f"Content: {doc}\n\n"
+            else:
+                # Regular PDF document
+                page_num = metadata.get('page_number', 1)
+                context += f"Source: {source_map[doc_title]} ({doc_title})\n"
+                context += f"Page: {page_num}\n"
+                context += f"Content: {doc}\n\n"
         
         # Store the source mapping for later use
         self.source_map = source_map
         
         return context
+        
+    def save_temp_file(self, file_obj) -> Optional[Tuple[str, str]]:
+        """Save an uploaded file to a temporary location."""
+        try:
+            # Handle Gradio file object
+            if isinstance(file_obj, tuple) and len(file_obj) == 2:
+                file_path = file_obj[1]
+                # If the file already exists on disk, return its path
+                if os.path.exists(file_path):
+                    return file_path, os.path.basename(file_path)
+            
+            # Get original filename if available
+            original_filename = None
+            if hasattr(file_obj, 'name'):
+                original_filename = os.path.basename(file_obj.name)
+                
+            # Determine file extension
+            file_ext = '.tmp'
+            if original_filename:
+                _, file_ext = os.path.splitext(original_filename)
+            
+            # Create a temporary file with the appropriate extension
+            with tempfile.NamedTemporaryFile(delete=False, suffix=file_ext) as tmp:
+                if hasattr(file_obj, 'read'):
+                    # If it's a file-like object with read method
+                    tmp.write(file_obj.read())
+                elif isinstance(file_obj, bytes):
+                    # If it's raw bytes
+                    tmp.write(file_obj)
+                elif isinstance(file_obj, str):
+                    # If it's a file path
+                    if os.path.exists(file_obj):
+                        with open(file_obj, 'rb') as f:
+                            tmp.write(f.read())
+                    else:
+                        # If it's a string content
+                        tmp.write(file_obj.encode())
+                else:
+                    # For Gradio newer versions, the file is directly provided as a path
+                    return file_obj, original_filename or os.path.basename(file_obj)
+                    
+                return tmp.name, original_filename or os.path.basename(tmp.name)
+        except Exception as e:
+            print(f"Error saving temporary file: {e}")
+            return None, None
