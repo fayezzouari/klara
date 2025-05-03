@@ -51,6 +51,17 @@ This AI Copilot is designed to help developers and analysts working in renewable
 Try it out directly in the [Hugging Face Space](https://huggingface.co/spaces/fayezzouari/klara).
 
 ---
+title: AI Copilot for Renewable Energy Data Rooms
+emoji: ⚡
+colorFrom: green
+colorTo: blue
+sdk: gradio
+sdk_version: "4.16.0"
+app_file: app.py
+pinned: false
+url: https://huggingface.co/spaces/fayezzouari/klara
+---
+---
 
 ## 🌟 Features
 
