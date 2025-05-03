@@ -303,6 +303,8 @@ class DocumentProcessor:
             - Include citations for every piece of information you provide
             - Try to use information from multiple documents when appropriate
             - At the end of your response, include a "Sources:" section that lists all source numbers and their document titles
+            - If the one source is sufficient, you can just use that one source, but still include the "Sources:" section
+            - If the rest of the sources are not relevant, you can skip them in the answer.
             
             Context:
             {context}
