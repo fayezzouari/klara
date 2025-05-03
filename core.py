@@ -166,52 +166,97 @@ class DocumentProcessor:
         return self.store_chunks(chunked_docs)
     
     def query_documents(self, query: str, n_results: int = DEFAULT_RESULTS_COUNT) -> Dict:
-        """Query the vector database for relevant chunks."""
+        """Query the vector database for relevant chunks across all documents."""
         try:
+            # Increase the number of results to ensure we get a diverse set of documents
+            enhanced_n_results = n_results * 3
+            
             results = self.collection.query(
                 query_texts=[query],
-                n_results=n_results
+                n_results=enhanced_n_results,
+                include=["documents", "metadatas", "distances"]
             )
             
-            return results
+            # If we have too few results, return what we have
+            if not results or not results['documents'] or not results['documents'][0]:
+                return results
+                
+            # Post-process results to ensure diversity across documents
+            processed_results = self._ensure_document_diversity(results, n_results)
+            return processed_results
+            
         except Exception as e:
             print(f"Error querying documents: {e}")
             return None
-    
-    def format_context_from_results(self, results: Dict) -> str:
-        """Format query results into context for the LLM."""
-        if not results or not results['documents'][0]:
-            return "No relevant documents found."
-        
-        context = ""
-        source_map = {}  # Map document titles to source numbers
-        current_source = 1
-        
-        # First, assign source numbers to each unique document
-        for metadata in results['metadatas'][0]:
-            doc_title = metadata['document_title']
-            if doc_title not in source_map:
-                source_map[doc_title] = current_source
-                current_source += 1
-        
-        # Format context with source numbers
-        for i, (doc, metadata) in enumerate(zip(results['documents'][0], results['metadatas'][0])):
-            doc_title = metadata['document_title']
-            page_num = metadata['page_number']
-            source_num = source_map[doc_title]
             
-            context += f"Source: {source_num} ({doc_title})\n"
-            context += f"Page: {page_num}\n"
-            context += f"Content: {doc}\n\n"
+    def _ensure_document_diversity(self, results: Dict, target_n_results: int) -> Dict:
+        """Process query results to ensure diversity across different documents.
         
-        # Store the source mapping for later use
-        self.source_map = source_map
+        This helps ensure we get context from multiple documents, not just the most similar chunks
+        from a single document.
+        """
+        if not results or not results['documents'] or not results['documents'][0]:
+            return results
+            
+        documents = results['documents'][0]
+        metadatas = results['metadatas'][0]
+        distances = results.get('distances', [[]])[0]
         
-        return context
+        # Group by document title
+        doc_groups = {}
+        for i, (doc, meta, dist) in enumerate(zip(documents, metadatas, distances)):
+            doc_title = meta.get('document_title', '')
+            if doc_title not in doc_groups:
+                doc_groups[doc_title] = []
+                
+            doc_groups[doc_title].append({
+                'document': doc,
+                'metadata': meta,
+                'distance': dist,
+                'index': i
+            })
+        
+        # Sort each group by relevance (distance)
+        for title in doc_groups:
+            doc_groups[title].sort(key=lambda x: x['distance'])
+        
+        # Take the most relevant chunks from each document in a round-robin fashion
+        selected_indices = []
+        doc_titles = list(doc_groups.keys())
+        
+        # First take the best result from each document
+        for title in doc_titles:
+            if doc_groups[title]:
+                selected_indices.append(doc_groups[title].pop(0)['index'])
+        
+        # Then continue round-robin until we have enough results
+        while len(selected_indices) < target_n_results and any(doc_groups.values()):
+            for title in doc_titles:
+                if doc_groups[title]:
+                    selected_indices.append(doc_groups[title].pop(0)['index'])
+                    if len(selected_indices) >= target_n_results:
+                        break
+        
+        # Sort by original index to maintain order
+        selected_indices.sort()
+        
+        # Create new results with selected indices
+        new_results = {
+            'documents': [[documents[i] for i in selected_indices]],
+            'metadatas': [[metadatas[i] for i in selected_indices]],
+        }
+        
+        if distances:
+            new_results['distances'] = [[distances[i] for i in selected_indices]]
+            
+        return new_results
 
     def generate_response(self, query: str, n_results: int = DEFAULT_RESULTS_COUNT) -> str:
         """Generate a response to a query using retrieved documents and LLM."""
-        results = self.query_documents(query, n_results)
+        # Increase the default number of results to get context from more documents
+        effective_n_results = max(n_results, DEFAULT_RESULTS_COUNT * 2)
+        
+        results = self.query_documents(query, effective_n_results)
         if not results or not results['documents'][0]:
             return "I couldn't find any relevant information to answer your question."
         
@@ -221,6 +266,13 @@ class DocumentProcessor:
         # Get source document information
         source_map = getattr(self, 'source_map', {})
         sources_info = []
+        
+        # Get unique document titles
+        document_titles = set()
+        for metadata in results['metadatas'][0]:
+            document_titles.add(metadata['document_title'])
+            
+        print(f"Retrieved context from {len(document_titles)} different documents")
         
         for metadata in results['metadatas'][0]:
             doc_title = metadata['document_title']
@@ -249,6 +301,7 @@ class DocumentProcessor:
             - For example, [1-3] refers to source #1, page 3
             - Always put citations in square brackets like [1-1], [2-6], etc.
             - Include citations for every piece of information you provide
+            - Try to use information from multiple documents when appropriate
             - At the end of your response, include a "Sources:" section that lists all source numbers and their document titles
             
             Context:
@@ -258,7 +311,8 @@ class DocumentProcessor:
             
             Answer the question based on the context. If you don't know the answer, say so.
             Use the format [N-P] for citations, where N is the source number and P is the page number.
-            At the end, add a "Sources:" section listing all source numbers and their document names."""
+            At the end, add a "Sources:" section listing all source numbers and their document names.
+            Make sure to include information from all relevant documents in your answer."""
         )
         
         # Create chain
@@ -324,3 +378,34 @@ class DocumentProcessor:
         except Exception as e:
             print(f"Error saving temporary PDF: {e}")
             return None
+
+    def format_context_from_results(self, results: Dict) -> str:
+        """Format query results into context for the LLM."""
+        if not results or not results['documents'][0]:
+            return "No relevant documents found."
+        
+        context = ""
+        source_map = {}  # Map document titles to source numbers
+        current_source = 1
+        
+        # First, assign source numbers to each unique document
+        for metadata in results['metadatas'][0]:
+            doc_title = metadata['document_title']
+            if doc_title not in source_map:
+                source_map[doc_title] = current_source
+                current_source += 1
+        
+        # Format context with source numbers
+        for i, (doc, metadata) in enumerate(zip(results['documents'][0], results['metadatas'][0])):
+            doc_title = metadata['document_title']
+            page_num = metadata['page_number']
+            source_num = source_map[doc_title]
+            
+            context += f"Source: {source_num} ({doc_title})\n"
+            context += f"Page: {page_num}\n"
+            context += f"Content: {doc}\n\n"
+        
+        # Store the source mapping for later use
+        self.source_map = source_map
+        
+        return context
