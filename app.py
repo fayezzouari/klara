@@ -3,53 +3,85 @@ import gradio as gr
 from core import DocumentProcessor
 from utils.markdown_formatter import convert_citations_to_markdown
 from utils.url_utils import download_pdf, is_valid_url, is_pdf_url, extract_pdf_links_from_webpage
-
+from dotenv import load_dotenv
+from PIL import Image
 # Initialize the document processor
 processor = DocumentProcessor()
 
 def process_multiple_files(pdf_files, pdf_urls):
-    """Process multiple PDF files and URLs."""
+    """Process multiple PDF and image files, as well as URLs."""
+    # cean up temporary files
+    
+
     if not pdf_files and not (pdf_urls and pdf_urls.strip()):
         return "No files or URLs provided. Please upload files or enter URLs."
     
     results = []
     processed_count = 0
     
-    # Process uploaded files
-    if pdf_files:
-        for pdf_file in pdf_files:
-            try:
-                # Extract original filename
-                original_filename = None
-                if isinstance(pdf_file, tuple):
-                    if len(pdf_file) >= 1:
-                        original_filename = os.path.basename(pdf_file[0])
-                elif isinstance(pdf_file, dict) and 'name' in pdf_file:
-                    original_filename = pdf_file['name']
-                elif hasattr(pdf_file, 'name'):
-                    original_filename = pdf_file.name
-                
-                if not original_filename:
-                    original_filename = f"uploaded_document_{processed_count}.pdf"
-                
-                # Save and process the file
-                pdf_path = processor.save_temp_pdf(pdf_file)
-                if pdf_path:
-                    success = processor.process_pdf(pdf_path, original_filename)
-                    
-                    # Clean up the temporary file
-                    if os.path.exists(pdf_path) and "tmp" in pdf_path:
-                        os.unlink(pdf_path)
-                    
-                    if success:
-                        results.append(f"✅ PDF '{original_filename}' successfully processed")
-                        processed_count += 1
-                    else:
-                        results.append(f"❌ Failed to process '{original_filename}'")
-            except Exception as e:
-                results.append(f"❌ Error processing file: {str(e)}")
+    # Separate PDFs and images
+    pdf_files_list = []
+    image_files_list = []
     
-    # Process URLs
+    if pdf_files:
+        for file in pdf_files:
+            original_filename = None
+            if isinstance(file, tuple):
+                if len(file) >= 1:
+                    original_filename = os.path.basename(file[0])
+            elif isinstance(file, dict) and 'name' in file:
+                original_filename = file['name']
+            elif hasattr(file, 'name'):
+                original_filename = file.name
+            
+            if original_filename:
+                if original_filename.lower().endswith('.pdf'):
+                    pdf_files_list.append(file)
+                elif original_filename.lower().endswith(('.png', '.jpg', '.jpeg')):
+                    image_files_list.append(file)
+                else:
+                    results.append(f"⚠️ Unsupported file type: '{original_filename}'")
+    
+    # Process PDF files
+    for pdf_file in pdf_files_list:
+        try:
+            original_filename = os.path.basename(pdf_file.name) if hasattr(pdf_file, 'name') else f"uploaded_document_{processed_count}.pdf"
+            pdf_path = processor.save_temp_pdf(pdf_file)
+            if pdf_path:
+                success = processor.process_pdf(pdf_path, original_filename)
+                
+                # Clean up the temporary file
+                if os.path.exists(pdf_path) and "tmp" in pdf_path:
+                    os.unlink(pdf_path)
+                print(f"PDF path: {pdf_path}")
+
+
+                if success:
+                    results.append(f"✅ PDF '{original_filename}' successfully processed")
+                    processed_count += 1
+                else:
+                    results.append(f"❌ Failed to process '{original_filename}'")
+        except Exception as e:
+            results.append(f"❌ Error processing PDF file: {str(e)}")
+    
+
+    # Process image files
+    for image_file in image_files_list:
+        try:
+            original_filename = os.path.basename(image_file.name) if hasattr(image_file, 'name') else f"uploaded_image_{processed_count}.png"
+            image_path = processor.save_temp_img(image_file)
+            if image_path:
+                success = processor.process_img(image_path, original_filename)
+                if success:
+                    results.append(f"✅ Image '{original_filename}' successfully processed")
+                    processed_count += 1
+                else:
+                    results.append(f"❌ Failed to process '{original_filename}'")
+        except Exception as e:
+            results.append(f"❌ Error processing image file: {str(e)}")
+    
+
+    # Process URLs (unchanged)
     if pdf_urls and pdf_urls.strip():
         urls = [url.strip() for url in pdf_urls.split('\n') if url.strip()]
         
@@ -82,7 +114,8 @@ def process_multiple_files(pdf_files, pdf_urls):
                     # Clean up the temporary file
                     if os.path.exists(pdf_path):
                         os.unlink(pdf_path)
-                    
+                    print(f"PDF path: {pdf_path}")
+
                     if success:
                         results.append(f"✅ PDF from URL '{url}' successfully processed as '{filename}'")
                         processed_count += 1
@@ -136,8 +169,12 @@ with gr.Blocks(title="PDF Document QA System") as demo:
         
         with gr.Row():
             with gr.Column(scale=1):
-                pdf_files = gr.File(label="Upload PDF Files", file_types=[".pdf"], file_count="multiple")
-            
+                # pdf_files = gr.File(label="Upload PDF Files", file_types=[".pdf"], file_count="multiple")
+                    pdf_files = gr.File(
+                    label="Upload PDF or Image Files", 
+                    file_types=[".pdf", ".png", ".jpg", ".jpeg"], 
+                    file_count="multiple"
+                )
             with gr.Column(scale=1):
                 pdf_urls = gr.Textbox(
                     label="PDF URLs or Webpages with PDFs (one per line)", 
@@ -174,10 +211,12 @@ The citations [p.X] and document names in the Sources section are clickable link
         )
 
 if __name__ == "__main__":
+    load_dotenv(dotenv_path=".env", override=True)
+
     # Check if .env file exists with GROQ_API_KEY
     if not os.path.exists(".env") or "GROQ_API_KEY" not in open(".env").read():
         print("Warning: .env file missing or GROQ_API_KEY not set.")
         print("Please create a .env file with GROQ_API_KEY=your_api_key")
-    
+
     # Launch with share=True to make temporary links accessible
     demo.launch()

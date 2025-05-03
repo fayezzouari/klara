@@ -10,6 +10,7 @@ from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.runnables import RunnablePassthrough
 import chromadb
+from langchain.schema import Document
 
 # Import configuration settings
 from config import (
@@ -102,12 +103,42 @@ class DocumentProcessor:
             print(f"Error parsing PDF: {e}")
             return []
     
+    # applying same logic but for images
+    def parse_img(self, image_path: str, original_filename: str = None) -> List[Dict]:
+        """Parse an image file and return documents with metadata."""
+        try:
+            #  image processing logic (e.g., OCR)
+            # text = process_image_with_ocr(image_path)  # Placeholder for actual OCR processing
+            text = "iyed has interned at Google and has worked on various projects in the field of AI and machine learning. He is passionate about using technology to solve real-world problems and is always looking for new challenges to tackle."
+            if not text:
+                print("No text found in the image.")
+                return []
+            
+            # For now, we will just simulate the output as a list of dictionaries
+            documents = [
+                Document(page_content=text, metadata={
+                    "document_name": original_filename or os.path.basename(image_path),
+                    "document_title": os.path.splitext(original_filename)[0] if original_filename else os.path.splitext(os.path.basename(image_path))[0],
+                    "file_path": os.path.abspath(image_path),  # Add file path to metadata
+                    "page": 0  
+                })
+
+            ]            
+            return documents
+            
+        except Exception as e:
+            print(f"Error parsing image: {e}")
+            return []
+
+
     def chunk_documents(self, documents: List[Dict]) -> List[Dict]:
         """Chunk documents using semantic chunker."""
         chunked_docs = []
         
         for doc in documents:
+            # page_content = doc["page_content"]
             page_content = doc.page_content
+
             metadata = doc.metadata
             
             if not page_content.strip():
@@ -156,6 +187,18 @@ class DocumentProcessor:
     def process_pdf(self, pdf_path: str, original_filename: str = None) -> bool:
         """Complete process to parse, chunk, and store PDF."""
         documents = self.parse_pdf(pdf_path, original_filename)
+        if not documents:
+            return False
+            
+        chunked_docs = self.chunk_documents(documents)
+        if not chunked_docs:
+            return False
+            
+        return self.store_chunks(chunked_docs)
+    # process images with same logic but ocr
+    def process_img(self, image_path: str, original_filename: str = None) -> bool:
+        """Complete process to parse, chunk, and store image."""
+        documents = self.parse_img(image_path, original_filename)
         if not documents:
             return False
             
@@ -380,6 +423,42 @@ class DocumentProcessor:
         except Exception as e:
             print(f"Error saving temporary PDF: {e}")
             return None
+    def save_temp_img(self, img_file) -> Optional[str]:
+        """Save an uploaded image to a temporary file."""
+        try:
+            # Handle Gradio file object which returns a tuple of (file_name, file_path)
+            if isinstance(img_file, tuple) and len(img_file) == 2:
+                file_path = img_file[1]
+                # If the file already exists on disk, return its path
+                if os.path.exists(file_path):
+                    return file_path
+            
+            # For handling direct file uploads or file-like objects
+            with tempfile.NamedTemporaryFile(delete=False, suffix='.jpg') as tmp:
+                if hasattr(img_file, 'read'):
+                    # If it's a file-like object with read method
+                    tmp.write(img_file.read())
+                elif isinstance(img_file, bytes):
+                    # If it's raw bytes
+                    tmp.write(img_file)
+                elif isinstance(img_file, str):
+                    # If it's a file path
+                    if os.path.exists(img_file):
+                        with open(img_file, 'rb') as f:
+                            tmp.write(f.read())
+                    else:
+                        # If it's a string content
+                        tmp.write(img_file.encode())
+                else:
+                    # For Gradio newer versions, the file is directly provided as a path
+                    return img_file
+                    
+                return tmp.name
+        except Exception as e:
+            print(f"Error saving temporary image: {e}")
+            return None
+        
+
 
     def format_context_from_results(self, results: Dict) -> str:
         """Format query results into context for the LLM."""
