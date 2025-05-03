@@ -265,7 +265,10 @@ if __name__ == "__main__":
         print("Install with: pip install pandas")
     
     # Launch with simpler configuration that works across Gradio versions
-    demo.launch(
+    app, local_url, share_url = demo.launch(
         show_error=True,
-        share=True
+        share=True,
     )
+    
+    # Set up file routes on the FastAPI app
+    setup_file_routes(app)
