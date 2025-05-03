@@ -3,7 +3,10 @@ import tempfile
 from typing import Dict, List, Any, Optional, Tuple
 from dotenv import load_dotenv
 
-from langchain_community.document_loaders.pdf import PyPDFLoader
+# Replace PyPDFLoader with our custom RobustPDFLoader
+from utils.pdf_loader import RobustPDFLoader
+from utils.file_service import copy_to_serve_dir, save_temp_file
+
 from chromadb.utils import embedding_functions
 from langchain_groq import ChatGroq
 from langchain_core.output_parsers import StrOutputParser
@@ -28,6 +31,9 @@ from splitters.document_splitter import DocumentSplitter
 
 # Import structured data processor
 from utils.structured_data_processor import StructuredDataProcessor
+
+# Import markdown formatter
+from utils.markdown_formatter import convert_citations_to_markdown
 
 # Load environment variables
 load_dotenv()
@@ -83,24 +89,27 @@ class DocumentProcessor:
     def parse_pdf(self, pdf_path: str, original_filename: str = None) -> List[Dict]:
         """Parse a PDF file and return documents with metadata."""
         try:
-            loader = PyPDFLoader(pdf_path)
+            # Use RobustPDFLoader instead of PyPDFLoader
+            loader = RobustPDFLoader(pdf_path)
             documents = loader.load()
             
             # Extract document name and title from original_filename if provided
-
             doc_name = os.path.basename(original_filename) if original_filename else os.path.basename(pdf_path)
             doc_title = os.path.splitext(doc_name)[0]
                 
             print(f"Using document name: {doc_name}, title: {doc_title}")
             
-            # Store the absolute path to the original file if it exists
-            file_path = os.path.abspath(pdf_path)
+            # Copy the PDF to the serve directory for web access
+            serve_path = copy_to_serve_dir(pdf_path, doc_name)
+            
+            # Use a web-accessible path for the file
+            file_path = serve_path
             
             # Enrich metadata
             for doc in documents:
                 doc.metadata["document_name"] = doc_name
                 doc.metadata["document_title"] = doc_title
-                doc.metadata["file_path"] = file_path  # Add file path to metadata
+                doc.metadata["file_path"] = file_path  # Use the served file path
                 doc.metadata["document_type"] = "pdf"  # Mark as PDF
                 
             return documents

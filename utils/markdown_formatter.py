@@ -1,70 +1,75 @@
+"""
+Utility functions for formatting markdown outputs from raw text responses.
+"""
 import re
 import os
-from typing import List, Dict, Any
-import urllib.parse
+from typing import Dict, List, Any
 
 def convert_citations_to_markdown(text: str, sources_info: List[Dict[str, Any]]) -> str:
     """
-    Convert plain text with citations like [N-P] into HTML with clickable links.
+    Convert citations in the form [N-P] to clickable markdown links.
     
     Args:
-        text: Response text with citations in [N-P] format
-        sources_info: List of dictionaries with source metadata
+        text (str): The text response with citations
+        sources_info (List[Dict]): List of source information with file_path and source_num
         
     Returns:
-        HTML formatted text with clickable citation links
+        str: Markdown text with clickable citations
     """
     if not sources_info:
         return text
     
-    # Create a mapping of source numbers to file paths and titles
-    source_num_to_info = {src['source_num']: src for src in sources_info}
+    # Create a mapping of source numbers to file paths
+    source_map = {}
+    for src in sources_info:
+        if "source_num" in src and "file_path" in src:
+            # Store the complete URL as provided by the file server
+            source_map[src["source_num"]] = src["file_path"]
     
-    # Replace citations with links
+    # Replace citations with markdown links
     def replace_citation(match):
-        source_num = int(match.group(1))
-        page_num = int(match.group(2))
-        citation_text = match.group(0)
+        citation = match.group(0)  # The full citation, e.g., [1-3]
         
-        # If we're in a "Sources:" section, don't convert the text
-        text_before = text[:match.start()]
-        if "Sources:" in text_before and text_before.rindex("Sources:") > text_before.rfind("\n\n"):
-            return citation_text
+        # Extract the source number and page number
+        match_parts = re.match(r'\[(\d+)-(\d+)\]', citation)
+        if not match_parts:
+            return citation
+            
+        source_num = int(match_parts.group(1))
+        page_num = int(match_parts.group(2))
         
-        # Check if we have info for this source number
-        if source_num in source_num_to_info:
-            src = source_num_to_info[source_num]
-            if src['file_path'] and os.path.exists(src['file_path']):
-                title = src['title']
-                # Use absolute file path with proper URL encoding
-                file_path = "file://" + urllib.parse.quote(os.path.abspath(src['file_path']))
+        # If we have a file path for this source, create a link
+        if source_num in source_map and source_map[source_num]:
+            # Use the URL directly as provided by file_service
+            url = source_map[source_num]
+            # Add page anchor for PDF.js viewer - #page=N format
+            if url.endswith('.pdf') or '.pdf' in url:
+                url = f"{url}#page={page_num}"
+            return f"[{citation}]({url})"
+        
+        return citation
+    
+    # Find and replace all citations in the format [N-P]
+    processed_text = re.sub(r'\[\d+-\d+\]', replace_citation, text)
+    
+    # Also make the sources section entries clickable
+    lines = processed_text.split('\n')
+    sources_section_started = False
+    
+    for i, line in enumerate(lines):
+        if line.strip() == "Sources:" or line.strip() == "Sources:":
+            sources_section_started = True
+            continue
+            
+        if sources_section_started:
+            # Match lines like "[1] Document Title"
+            match = re.match(r'^\[(\d+)\]\s+(.+)$', line.strip())
+            if match:
+                source_num = int(match.group(1))
                 
-                # Create HTML link directly
-                return f'<a href="{file_path}#page={page_num}" target="_blank" title="{title}, page {page_num}" style="color: #2C7BE5; text-decoration: underline;">{citation_text}</a>'
-        
-        return citation_text  # Return original text if no valid sources
+                if source_num in source_map and source_map[source_num]:
+                    url = source_map[source_num]
+                    lines[i] = f"[{line.strip()}]({url})"
     
-    # Replace citations in format [N-P]
-    html_text = re.sub(r'\[(\d+)-(\d+)\]', replace_citation, text)
-    
-    # Add links to source documents in the Sources section
-    if "Sources:" in html_text:
-        # Process each source reference like [1] Document Title
-        def replace_source_ref(match):
-            source_num = int(match.group(1))
-            if source_num in source_num_to_info:
-                src = source_num_to_info[source_num]
-                if src['file_path'] and os.path.exists(src['file_path']):
-                    file_path = "file://" + urllib.parse.quote(os.path.abspath(src['file_path']))
-                    return f'<a href="{file_path}" target="_blank" title="Open {src["title"]}" style="color: #28a745; font-weight: bold;">[{source_num}]</a>'
-            return match.group(0)
-        
-        html_text = re.sub(r'\[(\d+)\](?=\s+\w+)', replace_source_ref, html_text)
-    
-    # Wrap in a div for styling and preserve line breaks with <br> tags
-    styled_html = html_text.replace("\n\n", "<br><br>").replace("\n", "<br>")
-    
-    # Add final wrapper
-    final_html = f"""<div style="line-height: 1.5;">{styled_html}</div>"""
-    
-    return final_html
+    # Convert back to text
+    return "\n".join(lines)

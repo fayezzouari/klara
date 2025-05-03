@@ -1,10 +1,18 @@
 import os
 import gradio as gr
 from core import DocumentProcessor
+from file_routes import setup_file_routes
 from utils.markdown_formatter import convert_citations_to_markdown
 from utils.url_utils import download_pdf, is_valid_url, is_pdf_url, extract_pdf_links_from_webpage
+from utils.file_service import SERVE_DIR
+from file_server import start_server, FILE_DIR  # Import the file server
 from dotenv import load_dotenv
 from PIL import Image
+import shutil  # For file copying
+
+# Start the file server in the background
+server_thread = start_server()
+print("File server started on port 8089")
 
 # Initialize the document processor
 processor = DocumentProcessor()
@@ -15,6 +23,7 @@ def process_multiple_files(files, urls):
         return "No files or URLs provided. Please upload files or enter URLs."
     
     results = []
+    
     processed_count = 0
     
     # Process uploaded files
@@ -172,12 +181,10 @@ def query_documents(query_text):
     # Get the source information from the last query
     sources_info = processor.get_last_sources_info()
     
-    # Convert the response to HTML with clickable links
-    html_response = convert_citations_to_markdown(text_response, sources_info)
+    # Convert the response to markdown with clickable links
+    markdown_response = convert_citations_to_markdown(text_response, sources_info)
     
-
-    
-    return html_response
+    return markdown_response
 
 # Create the Gradio interface
 with gr.Blocks(title="Document QA System") as demo:
@@ -232,8 +239,8 @@ The citations [N-P] and document names in the Sources section are clickable link
         query_input = gr.Textbox(label="Your Question", lines=2, placeholder="What does the document say about...?")
         query_button = gr.Button("Ask", variant="primary")
         
-        # Use HTML component for better rendering of links
-        response_output = gr.HTML(label="Answer")
+        # Use Markdown component for better rendering of links
+        response_output = gr.Markdown(label="Answer")
         
         query_button.click(
             fn=query_documents,
@@ -257,5 +264,8 @@ if __name__ == "__main__":
         print("Warning: pandas is not installed. CSV and Excel processing will not work.")
         print("Install with: pip install pandas")
     
-    # Launch with share=True to make temporary links accessible
-    demo.launch()
+    # Launch with simpler configuration that works across Gradio versions
+    demo.launch(
+        show_error=True,
+        share=True
+    )
