@@ -79,18 +79,22 @@ class DocumentProcessor:
         try:
             loader = PyPDFLoader(pdf_path)
             documents = loader.load()
-            if not documents:
-                raise ValueError("No documents found in the PDF.")
-            else:
-                doc_name = os.path.basename(original_filename) if original_filename else os.path.basename(pdf_path)
-                doc_title = os.path.splitext(doc_name)[0]
+            
+            # Extract document name and title from original_filename if provided
+
+            doc_name = os.path.basename(original_filename) if original_filename else os.path.basename(pdf_path)
+            doc_title = os.path.splitext(doc_name)[0]
                 
             print(f"Using document name: {doc_name}, title: {doc_title}")
+            
+            # Store the absolute path to the original file if it exists
+            file_path = os.path.abspath(pdf_path)
             
             # Enrich metadata
             for doc in documents:
                 doc.metadata["document_name"] = doc_name
                 doc.metadata["document_title"] = doc_title
+                doc.metadata["file_path"] = file_path  # Add file path to metadata
                 
             return documents
             
@@ -121,7 +125,8 @@ class DocumentProcessor:
                         "document_title": metadata["document_title"],
                         "page_number": metadata["page"] + 1,  # Make page numbers 1-indexed
                         "chunk_id": chunk["chunk_id"],
-                        "token_count": chunk["token_count"]
+                        "token_count": chunk["token_count"],
+                        "file_path": metadata.get("file_path", "")  # Include file path in chunk metadata
                     }
                 })
         
@@ -179,15 +184,28 @@ class DocumentProcessor:
             return "No relevant documents found."
         
         context = ""
+        source_map = {}  # Map document titles to source numbers
+        current_source = 1
         
+        # First, assign source numbers to each unique document
+        for metadata in results['metadatas'][0]:
+            doc_title = metadata['document_title']
+            if doc_title not in source_map:
+                source_map[doc_title] = current_source
+                current_source += 1
+        
+        # Format context with source numbers
         for i, (doc, metadata) in enumerate(zip(results['documents'][0], results['metadatas'][0])):
-            # Clean up the document title for better readability
-            doc_title = metadata['document_name']
+            doc_title = metadata['document_title']
             page_num = metadata['page_number']
+            source_num = source_map[doc_title]
             
-            context += f"Document: {doc_title}\n"
+            context += f"Source: {source_num} ({doc_title})\n"
             context += f"Page: {page_num}\n"
             context += f"Content: {doc}\n\n"
+        
+        # Store the source mapping for later use
+        self.source_map = source_map
         
         return context
 
@@ -200,20 +218,38 @@ class DocumentProcessor:
         # Format context from retrieved documents
         context = self.format_context_from_results(results)
         
-        # Get source document names for citation
-        doc_titles = []
-        for metadata in results['metadatas'][0]:
-            if metadata['document_title'] not in doc_titles:
-                doc_titles.append(metadata['document_title'])
+        # Get source document information
+        source_map = getattr(self, 'source_map', {})
+        sources_info = []
         
-        # Create prompt template with improved citation instructions
+        for metadata in results['metadatas'][0]:
+            doc_title = metadata['document_title']
+            source_num = source_map.get(doc_title, 0)
+            
+            # Skip if we've already added this source
+            if any(src['source_num'] == source_num for src in sources_info):
+                continue
+                
+            sources_info.append({
+                "title": doc_title,
+                "file_path": metadata.get("file_path", ""),
+                "document_name": metadata.get("document_name", ""),
+                "source_num": source_num
+            })
+        
+        # Sort sources by source number
+        sources_info.sort(key=lambda x: x['source_num'])
+        
+        # Create prompt template with new citation format instructions
         prompt = ChatPromptTemplate.from_template(
             """You are a helpful assistant that answers questions based on the provided documents.
             
-            When citing information, use a clean format:
-            - Only mention the page number in parentheses like (p. 1)
-            - Avoid mentioning the document name in every citation
-            - At the end of your response, include a "Sources:" section that lists all document names used
+            When citing information, use this exact format:
+            - Format citations as [N-P] where N is the source number and P is the page number
+            - For example, [1-3] refers to source #1, page 3
+            - Always put citations in square brackets like [1-1], [2-6], etc.
+            - Include citations for every piece of information you provide
+            - At the end of your response, include a "Sources:" section that lists all source numbers and their document titles
             
             Context:
             {context}
@@ -221,8 +257,8 @@ class DocumentProcessor:
             Question: {question}
             
             Answer the question based on the context. If you don't know the answer, say so.
-            Use page numbers for citations in this format: (p. X) without the document name.
-            At the end, add a "Sources:" section listing all document names used."""
+            Use the format [N-P] for citations, where N is the source number and P is the page number.
+            At the end, add a "Sources:" section listing all source numbers and their document names."""
         )
         
         # Create chain
@@ -237,10 +273,22 @@ class DocumentProcessor:
         response = chain.invoke(query)
         
         # If sources weren't included, append them manually
-        if "Sources:" not in response and doc_titles:
-            response += "\n\nSources: " + ", ".join(doc_titles)
+        if "Sources:" not in response and sources_info:
+            sources_text = "\n\nSources:\n"
+            for src in sources_info:
+                sources_text += f"[{src['source_num']}] {src['title']}\n"
+            response += sources_text
+        
+        # Store the sources metadata for HTML processing
+        self.last_sources = sources_info
         
         return response
+        
+    def get_last_sources_info(self):
+        """Return metadata about the last sources used in a response."""
+        if hasattr(self, 'last_sources'):
+            return self.last_sources
+        return []
 
     def save_temp_pdf(self, pdf_file) -> Optional[str]:
         """Save an uploaded PDF to a temporary file."""
